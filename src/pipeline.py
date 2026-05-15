@@ -17,34 +17,22 @@ from src.models.neural_models import HybridGRU_LSTM
 # Data Scaling and Normalization
 def data_scaler(scaler_type):
     """
-    Function to scale cleaned data prior to any 
+    Scale the full dataset.
+
+    Note:
+        This helper is kept for backward compatibility. For model evaluation,
+        prefer splitting first and using `scale_train_test_data` to avoid
+        leakage from fitting the scaler on future/test data.
     """
 
     data = technical_indicator_creation()
+    scaler = MinMaxScaler() if scaler_type == 'MinMax' else StandardScaler()
 
-    # Normalize features using StandardScaler
-    standard_scaler = StandardScaler()
-    minmax_scaler = MinMaxScaler()
-
-    # Apply StandardScaler to the dataset
-    data_standardized = pd.DataFrame(
-        standard_scaler.fit_transform(data),
+    return pd.DataFrame(
+        scaler.fit_transform(data),
         columns=data.columns,
         index=data.index
     )
-
-    # Apply MinMaxScaler to the dataset
-    data_minmax = pd.DataFrame(
-        minmax_scaler.fit_transform(data),
-        columns=data.columns,
-        index=data.index
-    )
-
-    if scaler_type == 'MinMax':
-        return data_minmax
-
-    else:
-        return data_standardized
 
 # Apply feature selection (Random Forest ranking)
 
@@ -81,6 +69,25 @@ def train_test_split(dataset):
     test_data = dataset.iloc[train_size:,:].reset_index(drop=True)
 
     return train_data, test_data
+
+
+def scale_train_test_data(train_data, test_data, scaler_type):
+    """
+    Fit scaler on train split only, then transform train and test.
+    This avoids time-series leakage from future/test periods.
+    """
+    scaler = MinMaxScaler() if scaler_type == 'MinMax' else StandardScaler()
+    scaled_train = pd.DataFrame(
+        scaler.fit_transform(train_data),
+        columns=train_data.columns,
+        index=train_data.index
+    )
+    scaled_test = pd.DataFrame(
+        scaler.transform(test_data),
+        columns=test_data.columns,
+        index=test_data.index
+    )
+    return scaled_train, scaled_test, scaler
 
 # Create windowed tf.data.Dataset with different lookahead values
 # Lookahead options: 1 day, 10 days, 20 days
@@ -131,29 +138,29 @@ if __name__ == "__main__":
     instantiate model, train, and evaluate.
     """
     
-    # Step 1: Load and scale data
-    print("Loading and scaling data...")
-    scaled_data = data_scaler('MinMax')
+    # Step 1: Load data and split first to avoid leakage
+    print("Loading data...")
+    raw_data = technical_indicator_creation()
+    print("Splitting into train/test sets...")
+    train_raw, test_raw = train_test_split(raw_data)
+    print("Scaling data (fit on train only)...")
+    train_data, test_data, scaler = scale_train_test_data(train_raw, test_raw, 'MinMax')
     
     # Check target column stats
-    target_col = scaled_data['Ucome_fob_ARA']
+    target_col = train_data['Ucome_fob_ARA']
     print(f"\nTarget column (Ucome_fob_ARA) statistics:")
     print(f"  Min: {target_col.min():.6f}, Max: {target_col.max():.6f}")
     print(f"  Mean: {target_col.mean():.6f}, Std: {target_col.std():.6f}")
     
-    # Step 2: Split into train/test maintaining chronological order
-    print("Splitting into train/test sets...")
-    train_data, test_data = train_test_split(scaled_data)
-
     print("Training Data: " + str(train_data))
     print("Testing Data: " + str(test_data))
     
-    # Step 3: Create windowed dataset (targets automatically extracted)
+    # Step 2: Create windowed dataset (targets automatically extracted)
     print("\nCreating windowed dataset...")
     window_size = 30
     lookahead_value = 10
     batch_size = 32
-    n_features = scaled_data.shape[1]  # Number of features (price + indicators)
+    n_features = train_data.shape[1]  # Number of features (price + indicators)
     
     windowed_train = window_creator(train_data, window_size, lookahead_value, batch_size)
 
